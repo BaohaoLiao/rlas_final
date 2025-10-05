@@ -88,7 +88,7 @@ class AlgoConfig(BaseConfig):
 
     # Function when adv_estimator == "reinforce_ada"
     positive_threshold: float = 0.7
-    max_round: int = 4
+    max_rounds: int = 4
     round_repeat: int = 8
     global_stat_est: bool = False
     clip_stats: bool = False
