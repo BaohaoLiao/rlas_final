@@ -24,9 +24,7 @@ from omegaconf import OmegaConf
 
 from verl.experimental.dataset.sampler import AbstractSampler
 from verl.trainer.constants_ppo import get_ppo_ray_runtime_env
-from verl.trainer.ppo.ray_trainer_uniform import RayPPOTrainer as RayPPOTrainerUniform
-from verl.trainer.ppo.ray_trainer_vanilla import RayPPOTrainer as RayPPOTrainerVanilla
-from verl.trainer.ppo.ray_trainer import RayPPOTrainer as RayPPOTrainerAdaptive
+from verl.trainer.ppo.ray_trainer import RayPPOTrainer
 from verl.trainer.ppo.reward import load_reward_manager
 from verl.trainer.ppo.utils import need_critic, need_reference_policy
 from verl.utils.config import validate_config
@@ -136,7 +134,7 @@ class TaskRunner:
         else:
             raise NotImplementedError
 
-        from verl.trainer.ppo.ray_trainer import Role
+        from verl.trainer.ppo.ray_trainer_bp import Role
 
         self.role_worker_mapping[Role.ActorRollout] = ray.remote(actor_rollout_cls)
 
@@ -161,13 +159,13 @@ class TaskRunner:
         else:
             raise NotImplementedError
 
-        from verl.trainer.ppo.ray_trainer import Role
+        from verl.trainer.ppo.ray_trainer_bp import Role
 
         self.role_worker_mapping[Role.Critic] = ray.remote(CriticWorker)
 
     def init_resource_pool_mgr(self, config):
         """Initialize resource pool manager."""
-        from verl.trainer.ppo.ray_trainer import Role
+        from verl.trainer.ppo.ray_trainer_bp import Role
 
         global_pool_id = "global_pool"
         resource_pool_spec = {
@@ -185,14 +183,14 @@ class TaskRunner:
 
         self.mapping[Role.ActorRollout] = global_pool_id
         self.mapping[Role.Critic] = global_pool_id
-        from verl.trainer.ppo.ray_trainer import ResourcePoolManager
+        from verl.trainer.ppo.ray_trainer_bp import ResourcePoolManager
 
         resource_pool_manager = ResourcePoolManager(resource_pool_spec=resource_pool_spec, mapping=self.mapping)
         return resource_pool_manager
 
     def add_reward_model_worker(self, config):
         """Add reward model worker if enabled."""
-        from verl.trainer.ppo.ray_trainer import Role
+        from verl.trainer.ppo.ray_trainer_bp import Role
 
         if config.reward_model.enable:
             use_legacy_worker_impl = config.trainer.get("use_legacy_worker_impl", "auto")
@@ -218,7 +216,7 @@ class TaskRunner:
 
     def add_ref_policy_worker(self, config, ref_policy_cls):
         """Add reference policy worker if KL loss or KL reward is used."""
-        from verl.trainer.ppo.ray_trainer import Role
+        from verl.trainer.ppo.ray_trainer_bp import Role
 
         if config.algorithm.use_kl_in_reward or config.actor_rollout_ref.actor.use_kl_loss:
             self.role_worker_mapping[Role.RefPolicy] = ray.remote(ref_policy_cls)
@@ -296,33 +294,6 @@ class TaskRunner:
         train_dataset = create_rl_dataset(config.data.train_files, config.data, tokenizer, processor, is_train=True)
         val_dataset = create_rl_dataset(config.data.val_files, config.data, tokenizer, processor, is_train=False)
         train_sampler = create_rl_sampler(config.data, train_dataset)
-
-        if config.trainer.get("uniform_trainer", False):
-            print("Using uniform PPO trainer")
-            RayPPOTrainer = RayPPOTrainerUniform
-        elif config.trainer.get("adaptive_trainer", False):
-            print("Using adaptive PPO trainer")
-            RayPPOTrainer = RayPPOTrainerAdaptive
-        elif config.trainer.get("positive_trainer", False):
-            from verl.trainer.ppo.ray_trainer_positive import RayPPOTrainer as RayPPOTrainerPositive
-            print("Using positive PPO trainer")
-            RayPPOTrainer = RayPPOTrainerPositive
-        elif config.trainer.get("adaptive_reuse_trainer", False):
-            print("Using adaptive reuse PPO trainer")
-            from verl.trainer.ppo.ray_trainer_reuse import RayPPOTrainer as RayPPOTrainerAdaptiveReuse
-            RayPPOTrainer = RayPPOTrainerAdaptiveReuse
-        elif config.trainer.get("gen8_balanced_trainer", False) and (not config.algorithm.get("global_stat_est", False)):
-            #/home/hanzedong/reinforce_flow/verl/trainer/ppo/ray_trainer_gen8_balance.py
-            from verl.trainer.ppo.ray_trainer_gen8_balance import RayPPOTrainer as RayPPOTrainerGen8Balance
-            print("Using gen8 balanced PPO trainer")
-            RayPPOTrainer = RayPPOTrainerGen8Balance
-        elif config.trainer.get("gen8_balanced_trainer", False) and config.algorithm.global_stat_est:
-            from verl.trainer.ppo.ray_trainer_gen8_balance_globalvarmean import RayPPOTrainer as RayPPOTrainerGen8BalanceGlobal
-            print("Using gen8 balanced PPO trainer with global stat est")
-            RayPPOTrainer = RayPPOTrainerGen8BalanceGlobal 
-        else:
-            print("Using vanilla PPO trainer")
-            RayPPOTrainer = RayPPOTrainerVanilla
 
         # Initialize the PPO trainer.
         trainer = RayPPOTrainer(
