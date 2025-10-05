@@ -927,7 +927,7 @@ class RayPPOTrainer:
     ):
         """
         Iterative multi-round generation with early stopping downsampling.
-        
+
         Args:
             orig_prompt_batch: Original prompt batch to generate from
             positive_threshold: Threshold for classifying samples as positive (reward > threshold)
@@ -936,7 +936,7 @@ class RayPPOTrainer:
             final_keep_per_prompt: Final number of samples to keep per prompt (target: half positive, half negative)
             timing_raw: Optional dict to record timing information
             context_batch: Optional context batch for field alignment via uid
-            
+
         Returns:
             Tuple of (final_batch, rounds_info) where:
                 - final_batch: DataProto with selected samples and aligned context fields
@@ -955,10 +955,7 @@ class RayPPOTrainer:
         uid_arr = list(orig_prompt_batch.non_tensor_batch["uid"])
 
         # Initialize state tracking for each uid
-        state = {
-            uid: {"finished": False, "seen": 0, "pos": 0, "neg": 0}
-            for uid in uid_arr
-        }
+        state = {uid: {"finished": False, "seen": 0, "pos": 0, "neg": 0} for uid in uid_arr}
 
         # Caches for positive and negative samples per uid
         pos_cache = defaultdict(list)
@@ -972,13 +969,15 @@ class RayPPOTrainer:
         for r in range(max_rounds):
             t0 = time.time()
             if not active_uids:
-                rounds_info["per_round"].append({
-                    "round": r,
-                    "active_prompts": 0,
-                    "completed": 0,
-                    "finished_prompts": sum(1 for s in state.values() if s["finished"]),
-                    "sec": 0.0
-                })
+                rounds_info["per_round"].append(
+                    {
+                        "round": r,
+                        "active_prompts": 0,
+                        "completed": 0,
+                        "finished_prompts": sum(1 for s in state.values() if s["finished"]),
+                        "sec": 0.0,
+                    }
+                )
                 break
 
             # Create mini-batch for active prompts only
@@ -986,9 +985,9 @@ class RayPPOTrainer:
             active_indices = [uid_to_idx[uid] for uid in uid_arr if uid in active_uids]
             mini_prompt_batch = orig_prompt_batch[active_indices]
             round_inp = mini_prompt_batch.repeat(repeat_times=round_repeat, interleave=True)
-            
+
             # Pad to be divisible by dp_size
-            dp_size = self.actor_rollout_wg.dp_size if hasattr(self.actor_rollout_wg, 'dp_size') else 8
+            dp_size = self.actor_rollout_wg.dp_size if hasattr(self.actor_rollout_wg, "dp_size") else 8
             batch_size = len(round_inp)
             padding_applied = False
             if batch_size % dp_size != 0:
@@ -1003,14 +1002,14 @@ class RayPPOTrainer:
                 padding_batch = round_inp[indices_to_repeat]
                 round_inp = DataProto.concat([round_inp, padding_batch])
                 padding_applied = True
-            
+
             # Generate sequences
             gen_out = (
                 self.actor_rollout_wg.generate_sequences(round_inp)
                 if not self.async_rollout_mode
                 else self.async_rollout_manager.generate_sequences(round_inp)
             )
-            
+
             # Remove padding if applied
             if padding_applied:
                 gen_out = gen_out[:batch_size]
@@ -1028,7 +1027,7 @@ class RayPPOTrainer:
                 kl_ctrl_in_reward=self.kl_ctrl_in_reward if self.config.algorithm.use_kl_in_reward else None,
             )
             seq_reward_np = seq_reward.detach().cpu().numpy().tolist()
-            
+
             # Group by uid
             per_uid_local_idx = defaultdict(list)
             for j, uid in enumerate(uids_round):
@@ -1071,20 +1070,22 @@ class RayPPOTrainer:
 
             # Update active set
             active_uids = {u for u in active_uids if not state[u]["finished"]}
-            
+
             # Record timing and stats
             sec = time.time() - t0
             if timing_raw is not None:
                 timing_raw[f"gen_round_{r}_sec"] = sec
-            
-            rounds_info["per_round"].append({
-                "round": r,
-                "active_prompts": len(per_uid_local_idx),
-                "completed": completed_this_round,
-                "finished_prompts": sum(1 for s in state.values() if s["finished"]),
-                "reward_mean": float(np.mean(seq_reward_np)) if seq_reward_np else 0.0,
-                "sec": round(sec, 3)
-            })
+
+            rounds_info["per_round"].append(
+                {
+                    "round": r,
+                    "active_prompts": len(per_uid_local_idx),
+                    "completed": completed_this_round,
+                    "finished_prompts": sum(1 for s in state.values() if s["finished"]),
+                    "reward_mean": float(np.mean(seq_reward_np)) if seq_reward_np else 0.0,
+                    "sec": round(sec, 3),
+                }
+            )
             print(
                 f"[Gen-Round {r}] active_prompts={len(per_uid_local_idx)} "
                 f"completed={completed_this_round} "
@@ -1092,7 +1093,7 @@ class RayPPOTrainer:
                 f"time={sec:.3f}s "
                 f"reward_mean={rounds_info['per_round'][-1]['reward_mean']:.4f}"
             )
-            
+
             if not active_uids:
                 break
 
@@ -1105,17 +1106,17 @@ class RayPPOTrainer:
                 neg_num = len(neg_cache[uid])
                 n_rows = pos_num + neg_num
                 take = min(final_keep_per_prompt, n_rows)
-                
+
                 if n_rows < final_keep_per_prompt:
                     print(
                         f"[WARN] uid={uid} has {n_rows} samples, less than target "
                         f"{final_keep_per_prompt}, but continuing"
                     )
-                
+
                 # Try to maintain 1:1 positive:negative balance
                 actual_pos = min(pos_num, target_pos)
                 actual_neg = min(neg_num, target_neg)
-                
+
                 # If one type is insufficient, fill with the other
                 if actual_pos + actual_neg < take:
                     if pos_num > actual_pos:
@@ -1124,13 +1125,13 @@ class RayPPOTrainer:
                     elif neg_num > actual_neg:
                         additional_neg = min(neg_num - actual_neg, take - actual_pos - actual_neg)
                         actual_neg += additional_neg
-                
+
                 keep_pos = actual_pos
                 keep_neg = actual_neg
                 pos_frags = pos_cache[uid][:keep_pos] if keep_pos > 0 else []
                 neg_frags = neg_cache[uid][:keep_neg] if keep_neg > 0 else []
                 frags_to_merge = pos_frags + neg_frags
-                
+
                 if frags_to_merge:
                     merged = concat_dataproto_fragments(frags_to_merge)
                     selected_pool_batches.append(merged)
@@ -1142,26 +1143,25 @@ class RayPPOTrainer:
 
         if not selected_pool_batches:
             raise RuntimeError(
-                "No samples selected after early stopping. "
-                "Check if threshold/rules are too strict or data is abnormal"
+                "No samples selected after early stopping. Check if threshold/rules are too strict or data is abnormal"
             )
 
         # Concatenate all selected samples
         selected_batch = concat_dataproto_fragments(selected_pool_batches)
-        
+
         # Align context fields to selected batch
         _context_src = context_batch if context_batch is not None else orig_prompt_batch
         ctx_rows = align_context_to_selected(selected_batch, _context_src)
-        
+
         # Merge missing fields from context into selected batch
         merge_context_fields_into_batch(selected_batch, ctx_rows)
-        
+
         final_batch = selected_batch
-        
+
         # Ensure token_level_scores exists (fallback to token_level_rewards)
         if "token_level_scores" not in final_batch.batch and "token_level_rewards" in final_batch.batch:
             final_batch.batch["token_level_scores"] = final_batch.batch["token_level_rewards"]
-        
+
         # Validate that we maintained efficient TensorDict structure
         validate_tensordict_performance(final_batch, context="final_batch")
 
@@ -1260,26 +1260,43 @@ class RayPPOTrainer:
                             )
 
                         total_prompts = len(set(gen_batch.non_tensor_batch["uid"]))
-                        print(f"[Summary] prompts={total_prompts}, selected_rows={len(final_batch)}, "
-                              f"max_rounds={self.config.algorithm.max_rounds}")
+                        print(
+                            f"[Summary] prompts={total_prompts}, selected_rows={len(final_batch)}, "
+                            f"max_rounds={self.config.algorithm.max_rounds}"
+                        )
                         if rounds_info.get("per_round"):
                             for info in rounds_info["per_round"]:
-                                print(f"  - round {info['round']}: active={info['active_prompts']}, "
-                                      f"completed={info['completed']}, finished={info['finished_prompts']}, "
-                                      f"time={info['sec']}s")
-                        
+                                print(
+                                    f"  - round {info['round']}: active={info['active_prompts']}, "
+                                    f"completed={info['completed']}, finished={info['finished_prompts']}, "
+                                    f"time={info['sec']}s"
+                                )
+
                         metrics["sampling/total_samples"] = np.sum(
-                            [(info["active_prompts"] * self.config.algorithm.round_repeat) for info in rounds_info["per_round"]]
+                            [
+                                (info["active_prompts"] * self.config.algorithm.round_repeat)
+                                for info in rounds_info["per_round"]
+                            ]
                         )
-                        metrics["sampling/prompts_active_only_1st_round"] = rounds_info["per_round"][0]["finished_prompts"]
-                        
+                        metrics["sampling/prompts_active_only_1st_round"] = rounds_info["per_round"][0][
+                            "finished_prompts"
+                        ]
+
                         if len(rounds_info["per_round"]) > 1:
-                            metrics["sampling/prompts_active_after_1st_round"] = rounds_info["per_round"][1]["active_prompts"] - (rounds_info["per_round"][0]["active_prompts"] - rounds_info["per_round"][-1]["finished_prompts"])
+                            metrics["sampling/prompts_active_after_1st_round"] = rounds_info["per_round"][1][
+                                "active_prompts"
+                            ] - (
+                                rounds_info["per_round"][0]["active_prompts"]
+                                - rounds_info["per_round"][-1]["finished_prompts"]
+                            )
                         else:
                             metrics["sampling/prompts_active_after_1st_round"] = 0
-                        
-                        metrics["sampling/prompts_no_positive_anywhere"] = rounds_info["per_round"][0]["active_prompts"] - rounds_info["per_round"][-1]["finished_prompts"]
-                        metrics['sampling/kept_samples'] = len(final_batch)
+
+                        metrics["sampling/prompts_no_positive_anywhere"] = (
+                            rounds_info["per_round"][0]["active_prompts"]
+                            - rounds_info["per_round"][-1]["finished_prompts"]
+                        )
+                        metrics["sampling/kept_samples"] = len(final_batch)
                         metrics["critic/real_reward"] = rounds_info["per_round"][0]["reward_mean"]
                         metrics["sampling/downsampled_samples"] = len(final_batch)
                         metrics["sampling/total_prompts"] = total_prompts
@@ -1309,7 +1326,9 @@ class RayPPOTrainer:
                                 if not self.async_rollout_mode:
                                     gen_baseline_output = self.actor_rollout_wg.generate_sequences(gen_baseline_batch)
                                 else:
-                                    gen_baseline_output = self.async_rollout_manager.generate_sequences(gen_baseline_batch)
+                                    gen_baseline_output = self.async_rollout_manager.generate_sequences(
+                                        gen_baseline_batch
+                                    )
                                 batch = batch.union(gen_baseline_output)
                                 reward_baseline_tensor = self.reward_fn(batch)
                                 reward_baseline_tensor = reward_baseline_tensor.sum(dim=-1)
@@ -1337,16 +1356,18 @@ class RayPPOTrainer:
                             # Pad the batch to make it divisible by world_size
                             padding_needed = world_size - (batch_size % world_size)
                             print(f"Padding batch from {batch_size} to {batch_size + padding_needed} for balancing")
-                            
+
                             indices_to_repeat = random.choices(range(batch_size), k=padding_needed)
                             padding_batch = batch[indices_to_repeat]
                             batch = DataProto.concat([batch, padding_batch])
-                            
-                            if hasattr(batch.batch, '__class__'):
+
+                            if hasattr(batch.batch, "__class__"):
                                 batch_type = batch.batch.__class__.__name__
-                                if 'TensorDict' not in batch_type and 'dict' in batch_type.lower():
-                                    print(f"[perf_warn] After padding batch.batch is plain {batch_type}, may affect performance")
-                            
+                                if "TensorDict" not in batch_type and "dict" in batch_type.lower():
+                                    print(
+                                        f"[perf_warn] After padding batch.batch is plain {batch_type}, may affect performance"
+                                    )
+
                             self._balance_batch(batch, metrics=metrics)
                     batch.batch = batch.batch.contiguous()
 
@@ -1407,7 +1428,9 @@ class RayPPOTrainer:
                             batch.batch["token_level_scores"] = reward_tensor
 
                             if reward_extra_infos_dict:
-                                batch.non_tensor_batch.update({k: np.array(v) for k, v in reward_extra_infos_dict.items()})
+                                batch.non_tensor_batch.update(
+                                    {k: np.array(v) for k, v in reward_extra_infos_dict.items()}
+                                )
 
                             # compute rewards. apply_kl_penalty if available
                             if self.config.algorithm.use_kl_in_reward:

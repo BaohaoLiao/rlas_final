@@ -737,22 +737,22 @@ def compute_grpo_outcome_advantage(
 
         with torch.no_grad():
             bsz = scores.shape[0]
-            
+
             # 如果提供了全量统计信息，使用这些信息计算mean和std
             if grpo_uid_to_pos_count is not None and grpo_uid_to_neg_count is not None:
                 # 首先收集每个uid的当前samples用于计算
                 for i in range(bsz):
                     id2score[index[i]].append(scores[i])
-                
-                print("\n" + "="*80)
+
+                print("\n" + "=" * 80)
                 print("GRPO Advantage Calculation with Full Sampling Statistics")
-                print("="*80)
-                
+                print("=" * 80)
+
                 # 使用全量统计信息计算每个uid的真实mean和std
                 uid_to_full_stats = {}
                 uid_to_downsampled_stats = {}
                 debug_examples = []
-                
+
                 for i in range(bsz):
                     uid = index[i]
                     if uid not in uid_to_full_stats:
@@ -760,11 +760,11 @@ def compute_grpo_outcome_advantage(
                         pos_count = grpo_uid_to_pos_count.get(uid, 0)
                         neg_count = grpo_uid_to_neg_count.get(uid, 0)
                         total_count = pos_count + neg_count
-                        
+
                         # 验证总样本数是8的倍数
                         if total_count % 8 != 0:
                             print(f"[WARNING] UID {uid}: total_count={total_count} 不是8的倍数!")
-                        
+
                         if total_count == 0:
                             # 没有任何样本的情况（理论上不应该发生）
                             uid_to_full_stats[uid] = {"mean": 0.0, "std": 1.0}
@@ -779,14 +779,16 @@ def compute_grpo_outcome_advantage(
                                 n = (pos_count + neg_count) // 2
                                 all_samples = torch.cat([torch.ones(n), torch.zeros(n)])
                             else:
-                                all_samples = torch.cat([
-                                    torch.ones(pos_count),  # 正样本
-                                    torch.zeros(neg_count)  # 负样本
-                                ])
+                                all_samples = torch.cat(
+                                    [
+                                        torch.ones(pos_count),  # 正样本
+                                        torch.zeros(neg_count),  # 负样本
+                                    ]
+                                )
                             mean_val = torch.mean(all_samples).item()
                             std_val = max(torch.std(all_samples).item(), epsilon)  # 避免std为0
                             uid_to_full_stats[uid] = {"mean": mean_val, "std": std_val}
-                        
+
                         # 计算当前下采样样本的mean和std
                         if len(id2score[uid]) > 1:
                             downsampled_tensor = torch.stack(id2score[uid])
@@ -795,13 +797,13 @@ def compute_grpo_outcome_advantage(
                             uid_to_downsampled_stats[uid] = {"mean": downsampled_mean, "std": downsampled_std}
                         else:
                             uid_to_downsampled_stats[uid] = {"mean": 0.0, "std": 1.0}
-                        
+
                         # 验证全正或全负的一致性
-                        is_full_positive = (pos_count > 0 and neg_count == 0)
-                        is_full_negative = (pos_count == 0 and neg_count > 0)
+                        is_full_positive = pos_count > 0 and neg_count == 0
+                        is_full_negative = pos_count == 0 and neg_count > 0
                         is_downsampled_all_positive = all(s.item() > 0.5 for s in id2score[uid])  # 假设positive=1.0
                         is_downsampled_all_negative = all(s.item() < 0.5 for s in id2score[uid])  # 假设negative=0.0
-                        
+
                         if is_full_positive and not is_downsampled_all_positive:
                             print(f"[ERROR] UID {uid}: 全量样本全正，但下采样样本不全正!")
                         if is_full_negative and not is_downsampled_all_negative:
@@ -810,51 +812,61 @@ def compute_grpo_outcome_advantage(
                             print(f"[ERROR] UID {uid}: 下采样样本全正，但全量样本不全正!")
                         if is_downsampled_all_negative and not is_full_negative:
                             print(f"[ERROR] UID {uid}: 下采样样本全负，但全量样本不全负!")
-                        
+
                         # 当全正或全负时，验证mean和std的一致性
                         if is_full_positive or is_full_negative:
                             full_mean = uid_to_full_stats[uid]["mean"]
                             full_std = uid_to_full_stats[uid]["std"]
                             down_mean = uid_to_downsampled_stats[uid]["mean"]
                             down_std = uid_to_downsampled_stats[uid]["std"]
-                            
+
                             if abs(full_mean - down_mean) > 1e-6:
-                                print(f"[ERROR] UID {uid}: 全正/全负时mean不一致! full={full_mean:.6f}, down={down_mean:.6f}")
+                                print(
+                                    f"[ERROR] UID {uid}: 全正/全负时mean不一致! full={full_mean:.6f}, down={down_mean:.6f}"
+                                )
                             if abs(full_std - down_std) > 1e-6:
-                                print(f"[ERROR] UID {uid}: 全正/全负时std不一致! full={full_std:.6f}, down={down_std:.6f}")
-                        
+                                print(
+                                    f"[ERROR] UID {uid}: 全正/全负时std不一致! full={full_std:.6f}, down={down_std:.6f}"
+                                )
+
                         # 收集调试例子 - 总是添加，最后取最后10个
-                        debug_examples.append({
-                            "uid": uid,
-                            "pos_count": pos_count,
-                            "neg_count": neg_count,
-                            "total_count": total_count,
-                            "full_mean": uid_to_full_stats[uid]["mean"],
-                            "full_std": uid_to_full_stats[uid]["std"],
-                            "down_mean": uid_to_downsampled_stats[uid]["mean"],
-                            "down_std": uid_to_downsampled_stats[uid]["std"],
-                            "downsampled_scores": [s.item() for s in id2score[uid]]
-                        })
-                
+                        debug_examples.append(
+                            {
+                                "uid": uid,
+                                "pos_count": pos_count,
+                                "neg_count": neg_count,
+                                "total_count": total_count,
+                                "full_mean": uid_to_full_stats[uid]["mean"],
+                                "full_std": uid_to_full_stats[uid]["std"],
+                                "down_mean": uid_to_downsampled_stats[uid]["mean"],
+                                "down_std": uid_to_downsampled_stats[uid]["std"],
+                                "downsampled_scores": [s.item() for s in id2score[uid]],
+                            }
+                        )
+
                 # 打印调试例子 - 取最后10个
                 examples_to_show = debug_examples[-10:] if len(debug_examples) > 10 else debug_examples
                 print(f"\n调试例子 (最后{len(examples_to_show)}个UID):")
                 print("-" * 120)
-                print(f"{'UID':<8} {'Pos':<4} {'Neg':<4} {'Total':<6} {'Full_Mean':<10} {'Full_Std':<10} {'Down_Mean':<10} {'Down_Std':<10} {'Downsampled_Scores'}")
+                print(
+                    f"{'UID':<8} {'Pos':<4} {'Neg':<4} {'Total':<6} {'Full_Mean':<10} {'Full_Std':<10} {'Down_Mean':<10} {'Down_Std':<10} {'Downsampled_Scores'}"
+                )
                 print("-" * 120)
                 for ex in examples_to_show:
                     scores_str = str(ex["downsampled_scores"][:6])  # 只显示前6个
                     if len(ex["downsampled_scores"]) > 6:
                         scores_str = scores_str[:-1] + "...]"
-                    print(f"{str(ex['uid']):<8} {ex['pos_count']:<4} {ex['neg_count']:<4} {ex['total_count']:<6} "
-                        f"{ex['full_mean']:<10.4f} {ex['full_std']:<10.4f} {ex['down_mean']:<10.4f} {ex['down_std']:<10.4f} {scores_str}")
+                    print(
+                        f"{str(ex['uid']):<8} {ex['pos_count']:<4} {ex['neg_count']:<4} {ex['total_count']:<6} "
+                        f"{ex['full_mean']:<10.4f} {ex['full_std']:<10.4f} {ex['down_mean']:<10.4f} {ex['down_std']:<10.4f} {scores_str}"
+                    )
                 print("-" * 120)
-                
+
                 # 将计算出的stats映射到id2mean和id2std
                 for uid, stats in uid_to_full_stats.items():
                     id2mean[uid] = torch.tensor(stats["mean"])
                     id2std[uid] = torch.tensor(stats["std"])
-                    
+
             else:
                 # 回退到原始逻辑：使用下采样后的样本计算mean和std
                 for i in range(bsz):
@@ -869,7 +881,7 @@ def compute_grpo_outcome_advantage(
                         id2std[idx] = torch.std(scores_tensor)
                     else:
                         raise ValueError(f"no score in prompt index: {idx}")
-            
+
             # 应用advantage计算
             for i in range(bsz):
                 if norm_adv_by_std_in_grpo:
